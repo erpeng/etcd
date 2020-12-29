@@ -31,7 +31,9 @@ type raftLog struct {
 
 	// committed is the highest log position that is known to be in
 	// stable storage on a quorum of nodes.
+	// 保存在大多数节点持久化存储的最高日志位置
 	committed uint64
+	// 应用到状态机的最高日志位置
 	// applied is the highest log position that the application has
 	// been instructed to apply to its state machine.
 	// Invariant: applied <= committed

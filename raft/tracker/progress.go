@@ -23,6 +23,7 @@ import (
 // Progress represents a follower’s progress in the view of the leader. Leader
 // maintains progresses of all followers, and sends entries to the follower
 // based on its progress.
+// Progress 代表一个follower在leader视角下的进度
 //
 // NB(tbg): Progress is basically a state machine whose transitions are mostly
 // strewn around `*raft.raft`. Additionally, some fields are only used when in a

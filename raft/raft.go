@@ -46,6 +46,7 @@ const (
 
 type ReadOnlyOption int
 
+// linearizability:专有名词
 const (
 	// ReadOnlySafe guarantees the linearizability of the read only request by
 	// communicating with the quorum. It is the default and suggested option.
@@ -373,6 +374,7 @@ func newRaft(c *Config) *raft {
 	if c.Applied > 0 {
 		raftlog.appliedTo(c.Applied)
 	}
+	// Term从storage中的hardState获取到
 	r.becomeFollower(r.Term, None)
 
 	var nodesStrs []string
@@ -402,6 +404,7 @@ func (r *raft) send(m pb.Message) {
 	if m.From == None {
 		m.From = r.id
 	}
+	// MsgVote/MsgVoteResp/MsgPreVote/MsgPreVoteResp的Term不为0,其他类型信息Term均为0.
 	if m.Type == pb.MsgVote || m.Type == pb.MsgVoteResp || m.Type == pb.MsgPreVote || m.Type == pb.MsgPreVoteResp {
 		if m.Term == 0 {
 			// All {pre-,}campaign messages need to have the term set when
@@ -430,6 +433,7 @@ func (r *raft) send(m pb.Message) {
 			m.Term = r.Term
 		}
 	}
+	//消息放到r.msgs中,专门的goroutine处理？
 	r.msgs = append(r.msgs, m)
 }
 
@@ -454,6 +458,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 
 	term, errt := r.raftLog.term(pr.Next - 1)
 	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
+	// 如果没有entries并且sendIfEmtpy为false,则直接返回.否则继续执行
 	if len(ents) == 0 && !sendIfEmpty {
 		return false
 	}
@@ -493,6 +498,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 			// optimistically increase the next when in StateReplicate
 			case tracker.StateReplicate:
 				last := m.Entries[n-1].Index
+				//pr.Next更新为n+1
 				pr.OptimisticUpdate(last)
 				pr.Inflights.Add(last)
 			case tracker.StateProbe:
@@ -507,6 +513,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
+// 发送心跳,参数中Commit选取to.matched和r.committed中较小的值
 func (r *raft) sendHeartbeat(to uint64, ctx []byte) {
 	// Attach the commit as min(to.matched, r.committed).
 	// When the leader sends out heartbeat message,
@@ -555,6 +562,7 @@ func (r *raft) bcastHeartbeatWithCtx(ctx []byte) {
 	})
 }
 
+// Ready结构的作用以及advance函数的作用？
 func (r *raft) advance(rd Ready) {
 	r.reduceUncommittedSize(rd.CommittedEntries)
 
@@ -882,6 +890,7 @@ func (r *raft) Step(m pb.Message) error {
 		default:
 			r.logger.Infof("%x [term: %d] received a %s message with higher term from %x [term: %d]",
 				r.id, r.Term, m.Type, m.From, m.Term)
+			// 收到更大的term的信息,则变更为follower
 			if m.Type == pb.MsgApp || m.Type == pb.MsgHeartbeat || m.Type == pb.MsgSnap {
 				r.becomeFollower(m.Term, m.From)
 			} else {
