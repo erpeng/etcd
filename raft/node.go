@@ -58,6 +58,7 @@ type Ready struct {
 	// The current state of a Node to be saved to stable storage BEFORE
 	// Messages are sent.
 	// HardState will be equal to empty state if there is no update.
+	// 消息发送之前需要将HardState保存到stable storage
 	pb.HardState
 
 	// ReadStates can be used for node to serve linearizable read requests locally
@@ -68,24 +69,30 @@ type Ready struct {
 
 	// Entries specifies entries to be saved to stable storage BEFORE
 	// Messages are sent.
+	// 消息发送之前需要将Entries保存到stable storage
 	Entries []pb.Entry
 
 	// Snapshot specifies the snapshot to be saved to stable storage.
+	// 保存到stahble storage的Snapshot
 	Snapshot pb.Snapshot
 
 	// CommittedEntries specifies entries to be committed to a
 	// store/state-machine. These have previously been committed to stable
 	// store.
+	// 已经committed到stable storage的Entries.该变量指定需要应用到状态机的entries
 	CommittedEntries []pb.Entry
 
 	// Messages specifies outbound messages to be sent AFTER Entries are
 	// committed to stable storage.
 	// If it contains a MsgSnap message, the application MUST report back to raft
 	// when the snapshot has been received or has failed by calling ReportSnapshot.
+	// Entries commited到stable storage之后需要发送的消息
+	// 如果是MsgSnap消息,必须回复snapshot的接收情况（通过ReportSnapshot函数）
 	Messages []pb.Message
 
 	// MustSync indicates whether the HardState and Entries must be synchronously
 	// written to disk or if an asynchronous write is permissible.
+	// HardState和Entries是否应该同步写入磁盘
 	MustSync bool
 }
 
@@ -103,6 +110,7 @@ func IsEmptySnap(sp pb.Snapshot) bool {
 	return sp.Metadata.Index == 0
 }
 
+// Ready中是否包含更新
 func (rd Ready) containsUpdates() bool {
 	return rd.SoftState != nil || !IsEmptyHardState(rd.HardState) ||
 		!IsEmptySnap(rd.Snapshot) || len(rd.Entries) > 0 ||
@@ -112,6 +120,7 @@ func (rd Ready) containsUpdates() bool {
 // appliedCursor extracts from the Ready the highest index the client has
 // applied (once the Ready is confirmed via Advance). If no information is
 // contained in the Ready, returns zero.
+// 从Ready中抽取最大的应用后的index
 func (rd Ready) appliedCursor() uint64 {
 	if n := len(rd.CommittedEntries); n > 0 {
 		return rd.CommittedEntries[n-1].Index
@@ -128,9 +137,11 @@ type Node interface {
 	// timeouts and heartbeat timeouts are in units of ticks.
 	Tick()
 	// Campaign causes the Node to transition to candidate state and start campaigning to become leader.
+	// Node转换为candidate并且开始竞选leader
 	Campaign(ctx context.Context) error
 	// Propose proposes that data be appended to the log. Note that proposals can be lost without
 	// notice, therefore it is user's job to ensure proposal retries.
+	// 追加日志
 	Propose(ctx context.Context, data []byte) error
 	// ProposeConfChange proposes a configuration change. Like any proposal, the
 	// configuration change may be dropped with or without an error being
@@ -144,9 +155,11 @@ type Node interface {
 	// message is only allowed if all Nodes participating in the cluster run a
 	// version of this library aware of the V2 API. See pb.ConfChangeV2 for
 	// usage details and semantics.
+	// 提议一个配置变更.pb.ConfChange会逐步废弃,逐步实用ConfChangeV2
 	ProposeConfChange(ctx context.Context, cc pb.ConfChangeI) error
 
 	// Step advances the state machine using the given message. ctx.Err() will be returned, if any.
+	// 根据给定的message进行状态机的状态变更
 	Step(ctx context.Context, msg pb.Message) error
 
 	// Ready returns a channel that returns the current point-in-time state.
@@ -154,6 +167,7 @@ type Node interface {
 	//
 	// NOTE: No committed entries from the next Ready may be applied until all committed entries
 	// and snapshots from the previous one have finished.
+	// 返回一个内容为Ready的channel.Node在获取到Reday的状态后必须调用Advance
 	Ready() <-chan Ready
 
 	// Advance notifies the Node that the application has saved progress up to the last Ready.
@@ -174,9 +188,12 @@ type Node interface {
 	//
 	// Returns an opaque non-nil ConfState protobuf which must be recorded in
 	// snapshots.
+	// 当一个配置变更在Ready.CommittedEntries中获取到后,需要调用ApplyConfChange,改函数应用之前
+	// 被ProposeConfChange提交的配置变更
 	ApplyConfChange(cc pb.ConfChangeI) *pb.ConfState
 
 	// TransferLeadership attempts to transfer leadership to the given transferee.
+	// 传递leadership到一个指定的transferee.
 	TransferLeadership(ctx context.Context, lead, transferee uint64)
 
 	// ReadIndex request a read state. The read state will be set in the ready.
@@ -350,11 +367,14 @@ func (n *node) run() {
 			}
 		case m := <-n.recvc:
 			// filter out response message from unknown From.
+			// 处理响应信息
 			if pr := r.prs.Progress[m.From]; pr != nil || !IsResponseMsg(m.Type) {
 				r.Step(m)
 			}
 		case cc := <-n.confc:
+			// okBefore代表之前是否存在
 			_, okBefore := r.prs.Progress[r.id]
+			// 应用配置
 			cs := r.applyConfChange(cc)
 			// If the node was removed, block incoming proposals. Note that we
 			// only do this if the node was in the config before. Nodes may be
@@ -365,6 +385,7 @@ func (n *node) run() {
 			// NB: propc is reset when the leader changes, which, if we learn
 			// about it, sort of implies that we got readded, maybe? This isn't
 			// very sound and likely has bugs.
+			// okAfter代表配置应用之后是否还存在r.id
 			if _, okAfter := r.prs.Progress[r.id]; okBefore && !okAfter {
 				var found bool
 			outer:
@@ -387,6 +408,7 @@ func (n *node) run() {
 		case <-n.tickc:
 			n.rn.Tick()
 		case readyc <- rd:
+			// ready之后需要调用advance
 			n.rn.acceptReady(rd)
 			advancec = n.advancec
 		case <-advancec:
@@ -404,6 +426,7 @@ func (n *node) run() {
 
 // Tick increments the internal logical clock for this Node. Election timeouts
 // and heartbeat timeouts are in units of ticks.
+// Node的Tick()使tickc不阻塞
 func (n *node) Tick() {
 	select {
 	case n.tickc <- struct{}{}:
@@ -554,9 +577,12 @@ func (n *node) ReadIndex(ctx context.Context, rctx []byte) error {
 	return n.step(ctx, pb.Message{Type: pb.MsgReadIndex, Entries: []pb.Entry{{Data: rctx}}})
 }
 
+// 生成并且返回一个新的Ready结构体
 func newReady(r *raft, prevSoftSt *SoftState, prevHardSt pb.HardState) Ready {
 	rd := Ready{
-		Entries:          r.raftLog.unstableEntries(),
+		// 需要保存到storage的entries
+		Entries: r.raftLog.unstableEntries(),
+		// 需要应用到state machine的entries
 		CommittedEntries: r.raftLog.nextEnts(),
 		Messages:         r.msgs,
 	}

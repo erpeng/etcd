@@ -72,6 +72,7 @@ func (rn *RawNode) TickQuiesced() {
 }
 
 // Campaign causes this RawNode to transition to candidate state.
+// 调用Campaign会进入candidata状态 发送MsgHup消息
 func (rn *RawNode) Campaign() error {
 	return rn.raft.Step(pb.Message{
 		Type: pb.MsgHup,
@@ -79,6 +80,7 @@ func (rn *RawNode) Campaign() error {
 }
 
 // Propose proposes data be appended to the raft log.
+// 提交日志
 func (rn *RawNode) Propose(data []byte) error {
 	return rn.raft.Step(pb.Message{
 		Type: pb.MsgProp,
@@ -107,6 +109,7 @@ func (rn *RawNode) ApplyConfChange(cc pb.ConfChangeI) *pb.ConfState {
 }
 
 // Step advances the state machine using the given message.
+// 使用消息m改变状态机
 func (rn *RawNode) Step(m pb.Message) error {
 	// ignore unexpected local messages receiving over network
 	if IsLocalMsg(m.Type) {
@@ -122,6 +125,7 @@ func (rn *RawNode) Step(m pb.Message) error {
 // includes appending and applying entries or a snapshot, updating the HardState,
 // and sending messages. The returned Ready() *must* be handled and subsequently
 // passed back via Advance().
+// 返回一个Ready结构
 func (rn *RawNode) Ready() Ready {
 	rd := rn.readyWithoutAccept()
 	rn.acceptReady(rd)
@@ -149,6 +153,7 @@ func (rn *RawNode) acceptReady(rd Ready) {
 
 // HasReady called when RawNode user need to check if any Ready pending.
 // Checking logic in this method should be consistent with Ready.containsUpdates().
+// 是否有Ready的东西
 func (rn *RawNode) HasReady() bool {
 	r := rn.raft
 	if !r.softState().equal(rn.prevSoftSt) {

@@ -19,6 +19,9 @@ package tracker
 // use Full() to check whether more messages can be sent, call Add() whenever
 // they are sending a new append, and release "quota" via FreeLE() whenever an
 // ack is received.
+// 记录MsgApp消息,发送但是未ack
+// start为buffer开始的索引,buffer的容量大小为size,内部数据长度为count,buffer中每一个元素记录每个Inflights
+// 消息的最大index.
 type Inflights struct {
 	// the starting index in the buffer
 	start int

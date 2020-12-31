@@ -63,6 +63,7 @@ func (c Changer) EnterJoint(autoLeave bool, ccs ...pb.ConfChangeSingle) (tracker
 	}
 	// Clear the outgoing config.
 	*outgoingPtr(&cfg.Voters) = quorum.MajorityConfig{}
+	// 将所所有incoming的Voters放到outcgoing中
 	// Copy incoming to outgoing.
 	for id := range incoming(cfg.Voters) {
 		outgoing(cfg.Voters)[id] = struct{}{}
@@ -149,6 +150,7 @@ func (c Changer) Simple(ccs ...pb.ConfChangeSingle) (tracker.Config, tracker.Pro
 // apply a change to the configuration. By convention, changes to voters are
 // always made to the incoming majority config Voters[0]. Voters[1] is either
 // empty or preserves the outgoing majority configuration while in a joint state.
+// 根据ccs中的类型应用配置
 func (c Changer) apply(cfg *tracker.Config, prs tracker.ProgressMap, ccs ...pb.ConfChangeSingle) error {
 	for _, cc := range ccs {
 		if cc.NodeID == 0 {
@@ -297,6 +299,7 @@ func checkInvariants(cfg tracker.Config, prs tracker.ProgressMap) error {
 
 	// Any staged learner was staged because it could not be directly added due
 	// to a conflicting voter in the outgoing config.
+	// LearnersNext中的id肯定在Voters[1]中,但是不能是Learner
 	for id := range cfg.LearnersNext {
 		if _, ok := outgoing(cfg.Voters)[id]; !ok {
 			return fmt.Errorf("%d is in LearnersNext, but not Voters[1]", id)
@@ -306,6 +309,7 @@ func checkInvariants(cfg tracker.Config, prs tracker.ProgressMap) error {
 		}
 	}
 	// Conversely Learners and Voters doesn't intersect at all.
+	// Learners中的id不能够在Voters[1]和Voters[0]中
 	for id := range cfg.Learners {
 		if _, ok := outgoing(cfg.Voters)[id]; ok {
 			return fmt.Errorf("%d is in Learners and Voters[1]", id)
@@ -317,7 +321,7 @@ func checkInvariants(cfg tracker.Config, prs tracker.ProgressMap) error {
 			return fmt.Errorf("%d is in Learners, but is not marked as learner", id)
 		}
 	}
-
+	// 如果Voters[1]中有id,则说明是joint consencus状态
 	if !joint(cfg) {
 		// We enforce that empty maps are nil instead of zero.
 		if outgoing(cfg.Voters) != nil {

@@ -72,6 +72,7 @@ func newLogWithSize(storage Storage, logger Logger, maxNextEntsSize uint64) *raf
 	if err != nil {
 		panic(err) // TODO(bdarnell)
 	}
+	// unstable保存从lastIndex+1开始的数据
 	log.unstable.offset = lastIndex + 1
 	log.unstable.logger = logger
 	// Initialize our committed and applied pointers to the time of the last compaction.
@@ -235,6 +236,7 @@ func (l *raftLog) lastTerm() uint64 {
 	return t
 }
 
+// 先从unstable查找,如果未查找到,则从storage查找
 func (l *raftLog) term(i uint64) (uint64, error) {
 	// the valid term range is [index of dummy entry, last index]
 	dummyIndex := l.firstIndex() - 1

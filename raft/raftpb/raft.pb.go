@@ -70,10 +70,10 @@ func (EntryType) EnumDescriptor() ([]byte, []int) {
 type MessageType int32
 
 const (
-	MsgHup            MessageType = 0
+	MsgHup            MessageType = 0 // 调用Campain进入candidate时的消息
 	MsgBeat           MessageType = 1
-	MsgProp           MessageType = 2
-	MsgApp            MessageType = 3
+	MsgProp           MessageType = 2 // 调用Propose进入提交日志阶段
+	MsgApp            MessageType = 3 // Send entries时是该种类型
 	MsgAppResp        MessageType = 4
 	MsgVote           MessageType = 5
 	MsgVoteResp       MessageType = 6

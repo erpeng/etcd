@@ -127,6 +127,7 @@ type Config struct {
 	// learners contains the IDs of all learner nodes (including self if the
 	// local node is a learner) in the raft cluster. learners only receives
 	// entries from the leader node. It does not vote or promote itself.
+	// learners不投票也不选举,只从leader接收entries
 	learners []uint64
 
 	// ElectionTick is the number of Node.Tick invocations that must pass between
@@ -321,6 +322,7 @@ type raft struct {
 	logger Logger
 }
 
+// raftlog/stable storage关系
 func newRaft(c *Config) *raft {
 	if err := c.validate(); err != nil {
 		panic(err.Error())
@@ -368,6 +370,7 @@ func newRaft(c *Config) *raft {
 	}
 	assertConfStatesEquivalent(r.logger, cs, r.switchToConfig(cfg, prs))
 
+	// 从hardstate恢复r的状态
 	if !IsEmptyHardState(hs) {
 		r.loadState(hs)
 	}
@@ -378,6 +381,7 @@ func newRaft(c *Config) *raft {
 	r.becomeFollower(r.Term, None)
 
 	var nodesStrs []string
+	// 所有voters的ID串
 	for _, n := range r.prs.VoterNodes() {
 		nodesStrs = append(nodesStrs, fmt.Sprintf("%x", n))
 	}
@@ -422,6 +426,7 @@ func (r *raft) send(m pb.Message) {
 			panic(fmt.Sprintf("term should be set when sending %s", m.Type))
 		}
 	} else {
+		// 其他类型除了MsgProp以及MsgReadIndex,都需要附加Term为r.Term
 		if m.Term != 0 {
 			panic(fmt.Sprintf("term should not be set when sending %s (was %d)", m.Type, m.Term))
 		}
@@ -455,14 +460,15 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 	}
 	m := pb.Message{}
 	m.To = to
-
+	// 查找一个index所对应的term
 	term, errt := r.raftLog.term(pr.Next - 1)
+	// 查找所有需要发送的entries
 	ents, erre := r.raftLog.entries(pr.Next, r.maxMsgSize)
 	// 如果没有entries并且sendIfEmtpy为false,则直接返回.否则继续执行
 	if len(ents) == 0 && !sendIfEmpty {
 		return false
 	}
-
+	// term或者entries失败时发送snapshot
 	if errt != nil || erre != nil { // send snapshot if we failed to get term or entries
 		if !pr.RecentActive {
 			r.logger.Debugf("ignore sending snapshot to %x since it is not recently active", to)
@@ -488,6 +494,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 		pr.BecomeSnapshot(sindex)
 		r.logger.Debugf("%x paused sending replication messages to %x [%s]", r.id, to, pr)
 	} else {
+		// 否则发送MsgApp
 		m.Type = pb.MsgApp
 		m.Index = pr.Next - 1
 		m.LogTerm = term
@@ -498,7 +505,7 @@ func (r *raft) maybeSendAppend(to uint64, sendIfEmpty bool) bool {
 			// optimistically increase the next when in StateReplicate
 			case tracker.StateReplicate:
 				last := m.Entries[n-1].Index
-				//pr.Next更新为n+1
+				//pr.Next更新为last+1
 				pr.OptimisticUpdate(last)
 				pr.Inflights.Add(last)
 			case tracker.StateProbe:
@@ -593,10 +600,12 @@ func (r *raft) advance(rd Ready) {
 		}
 	}
 
+	// 更新raftLog中的entries,offset
 	if len(rd.Entries) > 0 {
 		e := rd.Entries[len(rd.Entries)-1]
 		r.raftLog.stableTo(e.Index, e.Term)
 	}
+	// 更新raftLog中的snapshot
 	if !IsEmptySnap(rd.Snapshot) {
 		r.raftLog.stableSnapTo(rd.Snapshot.Metadata.Index)
 	}
@@ -626,6 +635,7 @@ func (r *raft) reset(term uint64) {
 	r.prs.ResetVotes()
 	r.prs.Visit(func(id uint64, pr *tracker.Progress) {
 		*pr = tracker.Progress{
+			// 初始的match是0,next是最后一个index
 			Match:     0,
 			Next:      r.raftLog.lastIndex() + 1,
 			Inflights: tracker.NewInflights(r.prs.MaxInflight),
