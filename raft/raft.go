@@ -620,6 +620,7 @@ func (r *raft) maybeCommit() bool {
 }
 
 func (r *raft) reset(term uint64) {
+	//如果term不相等,说明进入了新的选举周期,此时将Vote置为none,并且将Term置为新的Term
 	if r.Term != term {
 		r.Term = term
 		r.Vote = None
@@ -725,8 +726,10 @@ func (r *raft) becomeCandidate() {
 		panic("invalid transition [leader -> candidate]")
 	}
 	r.step = stepCandidate
+	//Term增加1
 	r.reset(r.Term + 1)
 	r.tick = r.tickElection
+	//投自己一票
 	r.Vote = r.id
 	r.state = StateCandidate
 	r.logger.Infof("%x became candidate at term %d", r.id, r.Term)
@@ -772,6 +775,7 @@ func (r *raft) becomeLeader() {
 	r.pendingConfIndex = r.raftLog.lastIndex()
 
 	emptyEnt := pb.Entry{Data: nil}
+	//reset后uncommited size置为0,因此不会返回false
 	if !r.appendEntry(emptyEnt) {
 		// This won't happen because we just called reset() above.
 		r.logger.Panic("empty entry was dropped")
@@ -794,6 +798,7 @@ func (r *raft) hup(t CampaignType) {
 		r.logger.Warningf("%x is unpromotable and can not campaign", r.id)
 		return
 	}
+	//有pending conf change并且committed>applied,则不能竞选
 	ents, err := r.raftLog.slice(r.raftLog.applied+1, r.raftLog.committed+1, noLimit)
 	if err != nil {
 		r.logger.Panicf("unexpected error getting unapplied entries (%v)", err)
@@ -857,6 +862,7 @@ func (r *raft) campaign(t CampaignType) {
 		if t == campaignTransfer {
 			ctx = []byte(t)
 		}
+		//注意此时发送的投票信息index和logterm不是commited的,unstable中的数据也会计算在内
 		r.send(pb.Message{Term: term, To: id, Type: voteMsg, Index: r.raftLog.lastIndex(), LogTerm: r.raftLog.lastTerm(), Context: ctx})
 	}
 }
@@ -867,10 +873,13 @@ func (r *raft) poll(id uint64, t pb.MessageType, v bool) (granted int, rejected 
 	} else {
 		r.logger.Infof("%x received %s rejection from %x at term %d", r.id, t, id, r.Term)
 	}
+	//将标识为id投的一票进行记录
 	r.prs.RecordVote(id, v)
+	//统计票数,票数记录需要通过request vote的响应来确定
 	return r.prs.TallyVotes()
 }
 
+//网络层面调用Step方法,Step方法会根据当前的状态(candidate,follower,leader)来调用相应状态的step函数
 func (r *raft) Step(m pb.Message) error {
 	// Handle the message term, which may result in our stepping down to a follower.
 	switch {
@@ -900,7 +909,7 @@ func (r *raft) Step(m pb.Message) error {
 		default:
 			r.logger.Infof("%x [term: %d] received a %s message with higher term from %x [term: %d]",
 				r.id, r.Term, m.Type, m.From, m.Term)
-			// 收到更大的term的信息,则变更为follower
+			// 收到更大的term的信息,则变更为follower,消息可以为append entry,或者心跳或者快照
 			if m.Type == pb.MsgApp || m.Type == pb.MsgHeartbeat || m.Type == pb.MsgSnap {
 				r.becomeFollower(m.Term, m.From)
 			} else {
@@ -957,8 +966,10 @@ func (r *raft) Step(m pb.Message) error {
 
 	case pb.MsgVote, pb.MsgPreVote:
 		// We can vote if this is a repeat of a vote we've already cast...
+		// 已经投过票并且投的就是此消息的发送者
 		canVote := r.Vote == m.From ||
 			// ...we haven't voted and we don't think there's a leader yet in this term...
+			// 没有leader并且没有投过票
 			(r.Vote == None && r.lead == None) ||
 			// ...or this is a PreVote for a future term...
 			(m.Type == pb.MsgPreVote && m.Term > r.Term)
@@ -996,6 +1007,7 @@ func (r *raft) Step(m pb.Message) error {
 			r.send(pb.Message{To: m.From, Term: m.Term, Type: voteRespMsgType(m.Type)})
 			if m.Type == pb.MsgVote {
 				// Only record real votes.
+				//投票完毕后会重置选举超时时间并且记录已投票节点
 				r.electionElapsed = 0
 				r.Vote = m.From
 			}
