@@ -50,7 +50,9 @@ type ReadOnlyOption int
 const (
 	// ReadOnlySafe guarantees the linearizability of the read only request by
 	// communicating with the quorum. It is the default and suggested option.
+	// 通过和大多数节点交流-发心跳来确认leader不会提供stale data
 	ReadOnlySafe ReadOnlyOption = iota
+	// 通过租约来确定,如果时钟有跳变会有影响
 	// ReadOnlyLeaseBased ensures linearizability of the read only request by
 	// relying on the leader lease. It can be affected by clock drift.
 	// If the clock drift is unbounded, leader might keep the lease longer than it
@@ -116,6 +118,7 @@ func (st StateType) String() string {
 // Config contains the parameters to start a raft.
 type Config struct {
 	// ID is the identity of the local raft. ID cannot be 0.
+	// 节点ID
 	ID uint64
 
 	// peers contains the IDs of all nodes (including self) in the raft cluster. It
@@ -127,7 +130,7 @@ type Config struct {
 	// learners contains the IDs of all learner nodes (including self if the
 	// local node is a learner) in the raft cluster. learners only receives
 	// entries from the leader node. It does not vote or promote itself.
-	// learners不投票也不选举,只从leader接收entries
+	// learners不投票也不选举,只从leader接收entries.包括集群中所有的learners
 	learners []uint64
 
 	// ElectionTick is the number of Node.Tick invocations that must pass between
@@ -161,6 +164,7 @@ type Config struct {
 	MaxSizePerMsg uint64
 	// MaxCommittedSizePerReady limits the size of the committed entries which
 	// can be applied.
+	// 能够被applied的最大容量大的提交entries.etcd中apply即放到ready中供上层应用使用
 	MaxCommittedSizePerReady uint64
 	// MaxUncommittedEntriesSize limits the aggregate byte size of the
 	// uncommitted entries that may be appended to a leader's log. Once this
@@ -176,11 +180,13 @@ type Config struct {
 
 	// CheckQuorum specifies if the leader should check quorum activity. Leader
 	// steps down when quorum is not active for an electionTimeout.
+	// leader是否应该检查quorum的存活情况.超过electionTimeout之后如果quorum不达标则leader会转为follower?
 	CheckQuorum bool
 
 	// PreVote enables the Pre-Vote algorithm described in raft thesis section
 	// 9.6. This prevents disruption when a node that has been partitioned away
 	// rejoins the cluster.
+	// PriVote防止分区之后重新加入的节点直接选举
 	PreVote bool
 
 	// ReadOnlyOption specifies how the read only request is processed.
@@ -322,7 +328,6 @@ type raft struct {
 	logger Logger
 }
 
-// raftlog/stable storage关系
 func newRaft(c *Config) *raft {
 	if err := c.validate(); err != nil {
 		panic(err.Error())
@@ -788,6 +793,7 @@ func (r *raft) becomeLeader() {
 	r.logger.Infof("%x became leader at term %d", r.id, r.Term)
 }
 
+//发起竞选
 func (r *raft) hup(t CampaignType) {
 	if r.state == StateLeader {
 		r.logger.Debugf("%x ignoring MsgHup because already leader", r.id)
@@ -1138,6 +1144,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			r.readOnly.addRequest(r.raftLog.committed, m)
 			// The local node automatically acks the request.
 			r.readOnly.recvAck(r.id, m.Entries[0].Data)
+			//发一把心跳
 			r.bcastHeartbeatWithCtx(m.Entries[0].Data)
 		case ReadOnlyLeaseBased:
 			if resp := r.responseToReadIndexReq(m, r.raftLog.committed); resp.To != None {
@@ -1212,6 +1219,7 @@ func stepLeader(r *raft, m pb.Message) error {
 			}
 		}
 	case pb.MsgHeartbeatResp:
+		//收到心跳后将RecentActive置为true
 		pr.RecentActive = true
 		pr.ProbeSent = false
 
@@ -1226,7 +1234,7 @@ func stepLeader(r *raft, m pb.Message) error {
 		if r.readOnly.option != ReadOnlySafe || len(m.Context) == 0 {
 			return nil
 		}
-
+		// ReadIndex请求的心跳判断大部分是否已经返回
 		if r.prs.Voters.VoteResult(r.readOnly.recvAck(m.From, m.Context)) != quorum.VoteWon {
 			return nil
 		}
@@ -1386,6 +1394,7 @@ func stepFollower(r *raft, m pb.Message) error {
 		// extra round trip.
 		r.hup(campaignTransfer)
 	case pb.MsgReadIndex:
+		//ReadIndex请求
 		if r.lead == None {
 			r.logger.Infof("%x no leader at term %d; dropping index reading msg", r.id, r.Term)
 			return nil
@@ -1419,6 +1428,7 @@ func (r *raft) handleAppendEntries(m pb.Message) {
 
 func (r *raft) handleHeartbeat(m pb.Message) {
 	r.raftLog.commitTo(m.Commit)
+	//当执行ReadIndex请求时,Context有值
 	r.send(pb.Message{To: m.From, Type: pb.MsgHeartbeatResp, Context: m.Context})
 }
 
